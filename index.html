@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Voice Control</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 25px 15px;
+            font-family: Arial, sans-serif;
+            background: #101827;
+            color: white;
+            text-align: center;
+        }
+
+        .container {
+            max-width: 450px;
+            margin: auto;
+            padding: 25px;
+            background: #1e293b;
+            border-radius: 16px;
+        }
+
+        h1 {
+            font-size: 25px;
+            margin-bottom: 25px;
+        }
+
+        button {
+            width: 100%;
+            padding: 16px;
+            margin: 9px 0;
+            border: none;
+            border-radius: 9px;
+            font-size: 17px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        #connectButton {
+            background: #2563eb;
+            color: white;
+        }
+
+        #listenButton {
+            background: #16a34a;
+            color: white;
+        }
+
+        #listenButton.listening {
+            background: #dc2626;
+        }
+
+        .panel {
+            margin-top: 20px;
+            padding: 15px;
+            background: #0f172a;
+            border-radius: 10px;
+        }
+
+        .command-list {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .command {
+            padding: 13px 5px;
+            background: #334155;
+            border-radius: 8px;
+            font-weight: bold;
+        }
+
+        .command.active {
+            background: #15803d;
+        }
+
+        #recognizedText {
+            font-size: 18px;
+            min-height: 28px;
+            overflow-wrap: anywhere;
+        }
+
+        #log {
+            text-align: left;
+            font-size: 13px;
+            overflow-wrap: anywhere;
+            max-height: 180px;
+            overflow-y: auto;
+        }
+
+        .small {
+            color: #94a3b8;
+            font-size: 13px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>ESP32 Voice Control</h1>
+
+        <button id="connectButton">
+            Connect to ESP32
+        </button>
+
+        <div class="panel">
+            <p id="connectionStatus">Bluetooth: Disconnected</p>
+        </div>
+
+        <button id="listenButton" disabled>
+            Start Listening
+        </button>
+
+        <div class="panel">
+            <h3>Supported Voice Commands</h3>
+
+            <div class="command-list">
+                <div class="command" id="cmd-1">ON</div>
+                <div class="command" id="cmd-2">OFF</div>
+                <div class="command" id="cmd-3">STOP</div>
+                <div class="command" id="cmd-4">HELP</div>
+                <div class="command" id="cmd-5">EMERGENCY</div>
+                <div class="command" id="cmd-6">MAYDAY</div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h3>Recognized Speech</h3>
+            <p id="recognizedText">Waiting for speech...</p>
+            <p id="detectedCommand" class="small">Detected command: None</p>
+        </div>
+
+        <div class="panel">
+            <h3>Communication Log</h3>
+            <div id="log">System ready.</div>
+        </div>
+
+    </div>
+
+    <script>
+
+        // BLE CONFIGURATION
+
+        const SERVICE_UUID =
+            "000000ff-0000-1000-8000-00805f9b34fb";
+
+        const CHARACTERISTIC_UUID =
+            "0000ff01-0000-1000-8000-00805f9b34fb";
+
+        const DEVICE_NAME = "VOICE_CONTROL";
+
+
+        // COMMAND MAPPING
+
+        const commands = {
+            1: "ON",
+            2: "OFF",
+            3: "STOP",
+            4: "HELP",
+            5: "EMERGENCY",
+            6: "MAYDAY"
+        };
+
+
+        // BLE VARIABLES
+
+        let bleDevice = null;
+        let bleCharacteristic = null;
+
+        // SPEECH VARIABLES
+
+        let recognition = null;
+        let isListening = false;
+
+
+        // HTML ELEMENTS
+
+        const connectButton =
+            document.getElementById("connectButton");
+
+        const listenButton =
+            document.getElementById("listenButton");
+
+        const connectionStatus =
+            document.getElementById("connectionStatus");
+
+        const recognizedText =
+            document.getElementById("recognizedText");
+
+        const detectedCommand =
+            document.getElementById("detectedCommand");
+
+        const logElement =
+            document.getElementById("log");
+
+
+        // LOG FUNCTION
+
+        function addLog(message) {
+
+            const time = new Date().toLocaleTimeString();
+
+            const entry = document.createElement("p");
+
+            entry.textContent = `[${time}] ${message}`;
+
+            logElement.appendChild(entry);
+
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+
+        // COMMAND DISPLAY
+
+        function highlightCommand(id) {
+
+            document.querySelectorAll(".command").forEach(element => {
+                element.classList.remove("active");
+            });
+
+            const selected = document.getElementById("cmd-" + id);
+
+            if (selected) {
+                selected.classList.add("active");
+            }
+        }
+
+
+        // BLE CONNECTION
+
+        async function connectBLE() {
+
+            try {
+
+                if (!navigator.bluetooth) {
+                    throw new Error(
+                        "Web Bluetooth is not supported. Use Chrome on Android."
+                    );
+                }
+
+                connectionStatus.textContent = "Bluetooth: Searching...";
+
+                addLog("Searching for " + DEVICE_NAME);
+
+                bleDevice = await navigator.bluetooth.requestDevice({
+
+                    filters: [
+                        { name: DEVICE_NAME }
+                    ],
+
+                    optionalServices: [SERVICE_UUID]
+
+                });
+
+                bleDevice.addEventListener(
+                    "gattserverdisconnected",
+                    handleDisconnect
+                );
+
+                const server = await bleDevice.gatt.connect();
+
+                addLog("BLE connection established.");
+
+                const service =
+                    await server.getPrimaryService(SERVICE_UUID);
+
+                bleCharacteristic =
+                    await service.getCharacteristic(CHARACTERISTIC_UUID);
+
+                connectionStatus.textContent =
+                    "Bluetooth: Connected to " + bleDevice.name;
+
+                listenButton.disabled = false;
+
+                addLog("BLE characteristic discovered.");
+
+            } catch (error) {
+
+                connectionStatus.textContent = "Bluetooth: Connection failed";
+
+                addLog("Connection error: " + error.message);
+            }
+        }
+
+
+        // DISCONNECTION HANDLING
+
+        function handleDisconnect() {
+
+            bleCharacteristic = null;
+
+            connectionStatus.textContent = "Bluetooth: Disconnected";
+
+            listenButton.disabled = true;
+
+            if (isListening) {
+                stopListening();
+            }
+
+            addLog("ESP32 disconnected.");
+        }
+
+
+        // SEND RAW BYTE TO ESP32
+
+        async function sendCommand(id) {
+
+            if (!bleCharacteristic) {
+                addLog("Cannot send: ESP32 is disconnected.");
+                return;
+            }
+
+            try {
+
+                // Exactly one raw byte is transmitted.
+
+                const data = new Uint8Array([id]);
+
+                if (bleCharacteristic.properties.write) {
+
+                    await bleCharacteristic.writeValueWithResponse(data);
+
+                } else if (
+                    bleCharacteristic.properties.writeWithoutResponse
+                ) {
+
+                    await bleCharacteristic.writeValueWithoutResponse(data);
+
+                } else {
+
+                    throw new Error("Characteristic does not support writing.");
+                }
+
+                const hex = "0x" + id.toString(16)
+                    .padStart(2, "0")
+                    .toUpperCase();
+
+                addLog(
+                    "Sent " + commands[id] +
+                    " | ID: " + id +
+                    " | Byte: " + hex
+                );
+
+            } catch (error) {
+
+                addLog("Transmission error: " + error.message);
+            }
+        }
+
+
+        // COMMAND CLASSIFICATION
+
+        function classifyCommand(text) {
+
+            const words = text
+                .toUpperCase()
+                .replace(/[^A-Z0-9\s]/g, " ")
+                .split(/\s+/)
+                .filter(Boolean);
+
+            const supportedCommands = {
+
+                ON: 1,
+                OFF: 2,
+                STOP: 3,
+                HELP: 4,
+                EMERGENCY: 5,
+                MAYDAY: 6
+
+            };
+
+            // Check the recognized words for supported commands.
+
+            for (const word of words) {
+
+                if (Object.prototype.hasOwnProperty.call(
+                    supportedCommands, word
+                )) {
+
+                    return supportedCommands[word];
+                }
+            }
+
+            return null;
+        }
+
+
+        // PROCESS RECOGNIZED SPEECH
+
+        async function processSpeech(text) {
+
+            recognizedText.textContent = text;
+
+            const commandID = classifyCommand(text);
+
+            if (commandID !== null) {
+
+                const commandName = commands[commandID];
+
+                detectedCommand.textContent =
+                    "Detected command: " + commandName;
+
+                highlightCommand(commandID);
+
+                addLog("Command classified: " + commandName);
+
+                await sendCommand(commandID);
+
+            } else {
+
+                detectedCommand.textContent =
+                    "Detected command: No supported command";
+
+                highlightCommand(null);
+
+                addLog("No supported command detected.");
+            }
+        }
+
+
+        // SPEECH RECOGNITION INITIALIZATION
+
+        function initializeSpeechRecognition() {
+
+            const SpeechRecognition =
+                window.SpeechRecognition ||
+                window.webkitSpeechRecognition;
+
+            if (!SpeechRecognition) {
+
+                addLog(
+                    "Speech recognition is not supported by this browser."
+                );
+
+                return false;
+            }
+
+            recognition = new SpeechRecognition();
+
+            recognition.lang = "en-US";
+
+            recognition.continuous = true;
+
+            recognition.interimResults = false;
+
+            recognition.onresult = async function(event) {
+
+                const result =
+                    event.results[event.results.length - 1];
+
+                if (result.isFinal) {
+
+                    const text = result[0].transcript.trim();
+
+                    if (text) {
+                        await processSpeech(text);
+                    }
+                }
+            };
+
+            recognition.onerror = function(event) {
+
+                addLog("Speech error: " + event.error);
+
+                if (
+                    event.error === "not-allowed" ||
+                    event.error === "service-not-allowed"
+                ) {
+                    stopListening();
+                }
+            };
+
+            recognition.onend = function() {
+
+                if (isListening) {
+
+                    try {
+                        recognition.start();
+                    } catch (error) {
+                        addLog("Recognition restart: " + error.message);
+                    }
+                }
+            };
+
+            return true;
+        }
+
+
+        // START LISTENING
+
+        function startListening() {
+
+            if (!bleCharacteristic) {
+                addLog("Connect to ESP32 first.");
+                return;
+            }
+
+            if (!recognition) {
+
+                if (!initializeSpeechRecognition()) {
+                    return;
+                }
+            }
+
+            try {
+
+                isListening = true;
+
+                recognition.start();
+
+                listenButton.textContent = "Stop Listening";
+
+                listenButton.classList.add("listening");
+
+                addLog("Microphone listening started.");
+
+            } catch (error) {
+
+                isListening = false;
+
+                addLog("Could not start microphone: " + error.message);
+            }
+        }
+
+
+        // STOP LISTENING
+
+        function stopListening() {
+
+            isListening = false;
+
+            if (recognition) {
+                recognition.stop();
+            }
+
+            listenButton.textContent = "Start Listening";
+
+            listenButton.classList.remove("listening");
+
+            addLog("Microphone listening stopped.");
+        }
+
+
+        // BUTTON EVENTS
+
+        connectButton.addEventListener("click", connectBLE);
+
+        listenButton.addEventListener("click", function() {
+
+            if (isListening) {
+                stopListening();
+            } else {
+                startListening();
+            }
+
+        });
+
+
+    </script>
+
+</body>
+</html>
