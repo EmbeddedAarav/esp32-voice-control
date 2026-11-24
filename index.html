@@ -4,7 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 Voice Control</title>
+
+    <title>ESP32-S3 Voice Control</title>
 
     <style>
         * {
@@ -94,6 +95,11 @@
             overflow-wrap: anywhere;
         }
 
+        #detectedCommand {
+            color: #38bdf8;
+            font-weight: bold;
+        }
+
         #log {
             text-align: left;
             font-size: 13px;
@@ -113,49 +119,94 @@
 
     <div class="container">
 
-        <h1>ESP32 Voice Control</h1>
+        <h1>ESP32-S3 Voice Control</h1>
+
+        <!-- BLE CONNECTION -->
 
         <button id="connectButton">
             Connect to ESP32
         </button>
 
         <div class="panel">
-            <p id="connectionStatus">Bluetooth: Disconnected</p>
+            <p id="connectionStatus">
+                Bluetooth: Disconnected
+            </p>
         </div>
+
+
+        <!-- MICROPHONE CONTROL -->
 
         <button id="listenButton" disabled>
             Start Listening
         </button>
 
+        <p class="small">
+            Microphone automatically stops after 3 seconds.
+        </p>
+
+
+        <!-- SUPPORTED COMMANDS -->
+
         <div class="panel">
+
             <h3>Supported Voice Commands</h3>
 
             <div class="command-list">
+
                 <div class="command" id="cmd-1">ON</div>
+
                 <div class="command" id="cmd-2">OFF</div>
+
                 <div class="command" id="cmd-3">STOP</div>
+
                 <div class="command" id="cmd-4">HELP</div>
+
                 <div class="command" id="cmd-5">EMERGENCY</div>
+
                 <div class="command" id="cmd-6">MAYDAY</div>
+
             </div>
+
         </div>
 
+
+        <!-- RECOGNIZED SPEECH -->
+
         <div class="panel">
+
             <h3>Recognized Speech</h3>
-            <p id="recognizedText">Waiting for speech...</p>
-            <p id="detectedCommand" class="small">Detected command: None</p>
+
+            <p id="recognizedText">
+                Waiting for speech...
+            </p>
+
+            <p id="detectedCommand">
+                Detected command: None
+            </p>
+
         </div>
 
+
+        <!-- COMMUNICATION LOG -->
+
         <div class="panel">
+
             <h3>Communication Log</h3>
-            <div id="log">System ready.</div>
+
+            <div id="log">
+                System ready.
+            </div>
+
         </div>
 
     </div>
 
+
     <script>
 
-        // BLE CONFIGURATION
+        // ==========================================
+        // 1. BLE CONFIGURATION
+        // ==========================================
 
         const SERVICE_UUID =
             "000000ff-0000-1000-8000-00805f9b34fb";
@@ -166,30 +217,44 @@
         const DEVICE_NAME = "VOICE_CONTROL";
 
 
-        // COMMAND MAPPING
+        // ==========================================
+        // 2. COMMAND DEFINITIONS
+        // ==========================================
 
         const commands = {
+
             1: "ON",
             2: "OFF",
             3: "STOP",
             4: "HELP",
             5: "EMERGENCY",
             6: "MAYDAY"
+
         };
 
 
-        // BLE VARIABLES
+        // ==========================================
+        // 3. GLOBAL VARIABLES
+        // ==========================================
 
         let bleDevice = null;
+
         let bleCharacteristic = null;
 
-        // SPEECH VARIABLES
-
         let recognition = null;
+
         let isListening = false;
 
+        let listeningTimer = null;
 
-        // HTML ELEMENTS
+        let recognizedTranscript = "";
+
+        let sessionEnded = false;
+
+
+        // ==========================================
+        // 4. HTML ELEMENT REFERENCES
+        // ==========================================
 
         const connectButton =
             document.getElementById("connectButton");
@@ -210,7 +275,9 @@
             document.getElementById("log");
 
 
-        // LOG FUNCTION
+        // ==========================================
+        // 5. LOG FUNCTION
+        // ==========================================
 
         function addLog(message) {
 
@@ -222,225 +289,336 @@
 
             logElement.appendChild(entry);
 
-            logElement.scrollTop = logElement.scrollHeight;
+            logElement.scrollTop =
+                logElement.scrollHeight;
         }
 
 
-        // COMMAND DISPLAY
+        // ==========================================
+        // 6. COMMAND HIGHLIGHT
+        // ==========================================
 
         function highlightCommand(id) {
 
             document.querySelectorAll(".command").forEach(element => {
+
                 element.classList.remove("active");
+
             });
 
-            const selected = document.getElementById("cmd-" + id);
+            if (id !== null) {
 
-            if (selected) {
-                selected.classList.add("active");
+                const selected =
+                    document.getElementById("cmd-" + id);
+
+                if (selected) {
+
+                    selected.classList.add("active");
+
+                }
             }
         }
 
 
-        // BLE CONNECTION
+        // ==========================================
+        // 7. BLE CONNECTION
+        // ==========================================
 
         async function connectBLE() {
 
             try {
 
                 if (!navigator.bluetooth) {
+
                     throw new Error(
-                        "Web Bluetooth is not supported. Use Chrome on Android."
+                        "Web Bluetooth is unavailable. Use Chrome on Android."
                     );
+
                 }
 
-                connectionStatus.textContent = "Bluetooth: Searching...";
+                connectionStatus.textContent =
+                    "Bluetooth: Searching...";
 
                 addLog("Searching for " + DEVICE_NAME);
 
-                bleDevice = await navigator.bluetooth.requestDevice({
+                bleDevice =
+                    await navigator.bluetooth.requestDevice({
 
-                    filters: [
-                        { name: DEVICE_NAME }
-                    ],
+                        filters: [
+                            { name: DEVICE_NAME }
+                        ],
 
-                    optionalServices: [SERVICE_UUID]
+                        optionalServices: [SERVICE_UUID]
 
-                });
+                    });
+
 
                 bleDevice.addEventListener(
                     "gattserverdisconnected",
                     handleDisconnect
                 );
 
-                const server = await bleDevice.gatt.connect();
 
-                addLog("BLE connection established.");
+                connectionStatus.textContent =
+                    "Bluetooth: Connecting...";
+
+
+                const server =
+                    await bleDevice.gatt.connect();
+
 
                 const service =
                     await server.getPrimaryService(SERVICE_UUID);
 
+
                 bleCharacteristic =
-                    await service.getCharacteristic(CHARACTERISTIC_UUID);
+                    await service.getCharacteristic(
+                        CHARACTERISTIC_UUID
+                    );
+
 
                 connectionStatus.textContent =
                     "Bluetooth: Connected to " + bleDevice.name;
 
+
                 listenButton.disabled = false;
 
-                addLog("BLE characteristic discovered.");
+                addLog("BLE connection established.");
 
-            } catch (error) {
+                addLog("GATT characteristic discovered.");
 
-                connectionStatus.textContent = "Bluetooth: Connection failed";
+            }
+
+            catch (error) {
+
+                connectionStatus.textContent =
+                    "Bluetooth: Connection failed";
 
                 addLog("Connection error: " + error.message);
+
             }
         }
 
 
-        // DISCONNECTION HANDLING
+        // ==========================================
+        // 8. DISCONNECTION HANDLING
+        // ==========================================
 
         function handleDisconnect() {
 
+            if (isListening) {
+
+                stopListening();
+
+            }
+
             bleCharacteristic = null;
 
-            connectionStatus.textContent = "Bluetooth: Disconnected";
+            connectionStatus.textContent =
+                "Bluetooth: Disconnected";
 
             listenButton.disabled = true;
 
-            if (isListening) {
-                stopListening();
-            }
-
             addLog("ESP32 disconnected.");
+
         }
 
 
-        // SEND RAW BYTE TO ESP32
+        // ==========================================
+        // 9. SEND ONE RAW BYTE THROUGH BLE
+        // ==========================================
 
         async function sendCommand(id) {
 
             if (!bleCharacteristic) {
-                addLog("Cannot send: ESP32 is disconnected.");
+
+                addLog("ERROR: ESP32 is not connected.");
+
                 return;
             }
 
             try {
 
-                // Exactly one raw byte is transmitted.
+                // Create exactly one byte.
 
                 const data = new Uint8Array([id]);
 
+
                 if (bleCharacteristic.properties.write) {
 
-                    await bleCharacteristic.writeValueWithResponse(data);
+                    await bleCharacteristic.writeValueWithResponse(
+                        data
+                    );
 
-                } else if (
+                }
+
+                else if (
                     bleCharacteristic.properties.writeWithoutResponse
                 ) {
 
-                    await bleCharacteristic.writeValueWithoutResponse(data);
+                    await bleCharacteristic.writeValueWithoutResponse(
+                        data
+                    );
 
-                } else {
-
-                    throw new Error("Characteristic does not support writing.");
                 }
 
-                const hex = "0x" + id.toString(16)
-                    .padStart(2, "0")
-                    .toUpperCase();
+                else {
+
+                    throw new Error(
+                        "Characteristic does not support writing."
+                    );
+
+                }
+
+
+                const hex =
+                    "0x" +
+                    id.toString(16)
+                        .padStart(2, "0")
+                        .toUpperCase();
+
 
                 addLog(
-                    "Sent " + commands[id] +
+                    "TRANSMITTED: " +
+                    commands[id] +
                     " | ID: " + id +
-                    " | Byte: " + hex
+                    " | HEX: " + hex
                 );
 
-            } catch (error) {
+            }
 
-                addLog("Transmission error: " + error.message);
+            catch (error) {
+
+                addLog(
+                    "Transmission error: " + error.message
+                );
+
             }
         }
 
 
-        // COMMAND CLASSIFICATION
+        // ==========================================
+        // 10. COMMAND CLASSIFICATION
+        // ==========================================
 
         function classifyCommand(text) {
 
-            const words = text
+            const normalized = text
+
                 .toUpperCase()
+
                 .replace(/[^A-Z0-9\s]/g, " ")
-                .split(/\s+/)
-                .filter(Boolean);
 
-            const supportedCommands = {
+                .replace(/\s+/g, " ")
 
-                ON: 1,
-                OFF: 2,
-                STOP: 3,
-                HELP: 4,
-                EMERGENCY: 5,
-                MAYDAY: 6
+                .trim();
 
-            };
 
-            // Check the recognized words for supported commands.
+            // Check longer and more critical commands first.
 
-            for (const word of words) {
+            const priority = [
 
-                if (Object.prototype.hasOwnProperty.call(
-                    supportedCommands, word
-                )) {
+                ["EMERGENCY", 5],
 
-                    return supportedCommands[word];
+                ["MAYDAY", 6],
+
+                ["STOP", 3],
+
+                ["HELP", 4],
+
+                ["OFF", 2],
+
+                ["ON", 1]
+
+            ];
+
+
+            for (const [word, id] of priority) {
+
+                const pattern = new RegExp(
+                    "\\b" + word + "\\b"
+                );
+
+                if (pattern.test(normalized)) {
+
+                    return id;
+
                 }
             }
 
             return null;
+
         }
 
 
-        // PROCESS RECOGNIZED SPEECH
+        // ==========================================
+        // 11. PROCESS RECOGNIZED SPEECH
+        // ==========================================
 
         async function processSpeech(text) {
 
             recognizedText.textContent = text;
 
-            const commandID = classifyCommand(text);
+            addLog("Recognized speech: " + text);
+
+
+            const commandID =
+                classifyCommand(text);
+
 
             if (commandID !== null) {
 
-                const commandName = commands[commandID];
+                const commandName =
+                    commands[commandID];
+
 
                 detectedCommand.textContent =
                     "Detected command: " + commandName;
 
+
                 highlightCommand(commandID);
 
-                addLog("Command classified: " + commandName);
+
+                addLog(
+                    "Command classified: " + commandName
+                );
+
+
+                // Send only one command byte.
 
                 await sendCommand(commandID);
 
-            } else {
+            }
+
+            else {
 
                 detectedCommand.textContent =
                     "Detected command: No supported command";
 
+
                 highlightCommand(null);
 
-                addLog("No supported command detected.");
+
+                addLog(
+                    "No supported command detected."
+                );
+
             }
         }
 
 
-        // SPEECH RECOGNITION INITIALIZATION
+        // ==========================================
+        // 12. INITIALIZE SPEECH RECOGNITION
+        // ==========================================
 
         function initializeSpeechRecognition() {
 
             const SpeechRecognition =
+
                 window.SpeechRecognition ||
+
                 window.webkitSpeechRecognition;
+
 
             if (!SpeechRecognition) {
 
@@ -451,128 +629,305 @@
                 return false;
             }
 
+
             recognition = new SpeechRecognition();
+
+
+            // English speech recognition.
 
             recognition.lang = "en-US";
 
-            recognition.continuous = true;
+
+            // Capture one listening session.
+
+            recognition.continuous = false;
+
+
+            // Only process final speech results.
 
             recognition.interimResults = false;
 
-            recognition.onresult = async function(event) {
+
+            // Number of alternative recognition results.
+
+            recognition.maxAlternatives = 3;
+
+
+            recognition.onresult = function(event) {
+
+                if (sessionEnded) {
+                    return;
+                }
 
                 const result =
                     event.results[event.results.length - 1];
 
-                if (result.isFinal) {
 
-                    const text = result[0].transcript.trim();
+                if (result && result.isFinal) {
 
-                    if (text) {
-                        await processSpeech(text);
+                    const transcript =
+                        result[0].transcript.trim();
+
+                    if (transcript) {
+
+                        recognizedTranscript = transcript;
+
                     }
                 }
             };
 
+
             recognition.onerror = function(event) {
 
-                addLog("Speech error: " + event.error);
+                addLog(
+                    "Speech recognition error: " + event.error
+                );
 
                 if (
                     event.error === "not-allowed" ||
                     event.error === "service-not-allowed"
                 ) {
-                    stopListening();
+
+                    finishListening();
+
                 }
             };
+
 
             recognition.onend = function() {
 
-                if (isListening) {
+                finishListening();
 
-                    try {
-                        recognition.start();
-                    } catch (error) {
-                        addLog("Recognition restart: " + error.message);
-                    }
-                }
             };
 
+
             return true;
+
         }
 
 
-        // START LISTENING
+        // ==========================================
+        // 13. START LISTENING FOR THREE SECONDS
+        // ==========================================
 
         function startListening() {
 
             if (!bleCharacteristic) {
-                addLog("Connect to ESP32 first.");
+
+                addLog("Connect ESP32 first.");
+
                 return;
             }
+
+
+            if (isListening) {
+                return;
+            }
+
 
             if (!recognition) {
 
                 if (!initializeSpeechRecognition()) {
+
                     return;
+
                 }
             }
+
+
+            recognizedTranscript = "";
+
+            sessionEnded = false;
+
+
+            recognizedText.textContent =
+                "Listening...";
+
+
+            detectedCommand.textContent =
+                "Detected command: Waiting";
+
+
+            highlightCommand(null);
+
 
             try {
 
                 isListening = true;
 
-                recognition.start();
 
-                listenButton.textContent = "Stop Listening";
+                listenButton.textContent =
+                    "Listening...";
+
 
                 listenButton.classList.add("listening");
 
-                addLog("Microphone listening started.");
 
-            } catch (error) {
+                addLog(
+                    "Microphone activated for 3 seconds."
+                );
+
+
+                recognition.start();
+
+
+                // Automatically stop after 3 seconds.
+
+                listeningTimer = setTimeout(() => {
+
+                    if (isListening) {
+
+                        addLog(
+                            "Three seconds completed."
+                        );
+
+                        finishListening();
+
+                    }
+
+                }, 3000);
+
+
+            }
+
+            catch (error) {
 
                 isListening = false;
 
-                addLog("Could not start microphone: " + error.message);
+                listenButton.textContent =
+                    "Start Listening";
+
+                listenButton.classList.remove("listening");
+
+                addLog(
+                    "Could not start microphone: " +
+                    error.message
+                );
+
             }
         }
 
 
-        // STOP LISTENING
+        // ==========================================
+        // 14. FINISH LISTENING AND PROCESS ONCE
+        // ==========================================
 
-        function stopListening() {
+        async function finishListening() {
+
+            if (sessionEnded) {
+                return;
+            }
+
+            sessionEnded = true;
+
+            clearTimeout(listeningTimer);
+
+
+            const finalText =
+                recognizedTranscript.trim();
+
 
             isListening = false;
 
-            if (recognition) {
-                recognition.stop();
-            }
 
-            listenButton.textContent = "Start Listening";
+            listenButton.textContent =
+                "Start Listening";
+
 
             listenButton.classList.remove("listening");
 
-            addLog("Microphone listening stopped.");
+
+            // Stop browser recognition if it is still active.
+
+            if (recognition) {
+
+                try {
+
+                    recognition.stop();
+
+                }
+
+                catch (error) {
+
+                    // Recognition may already have stopped.
+
+                }
+            }
+
+
+            addLog("Microphone deactivated.");
+
+
+            if (finalText.length > 0) {
+
+                await processSpeech(finalText);
+
+            }
+
+            else {
+
+                recognizedText.textContent =
+                    "No speech detected.";
+
+                detectedCommand.textContent =
+                    "Detected command: None";
+
+                highlightCommand(null);
+
+                addLog(
+                    "No speech was recognized."
+                );
+
+            }
         }
 
 
-        // BUTTON EVENTS
+        // ==========================================
+        // 15. MANUAL STOP LISTENING
+        // ==========================================
 
-        connectButton.addEventListener("click", connectBLE);
+        function stopListening() {
 
-        listenButton.addEventListener("click", function() {
-
-            if (isListening) {
-                stopListening();
-            } else {
-                startListening();
+            if (!isListening) {
+                return;
             }
 
-        });
+            finishListening();
 
+        }
+
+
+        // ==========================================
+        // 16. BUTTON EVENTS
+        // ==========================================
+
+        connectButton.addEventListener(
+            "click",
+            connectBLE
+        );
+
+
+        listenButton.addEventListener(
+            "click",
+            function() {
+
+                if (isListening) {
+
+                    stopListening();
+
+                }
+
+                else {
+
+                    startListening();
+
+                }
+
+            }
+        );
 
     </script>
 
 </body>
+
 </html>
